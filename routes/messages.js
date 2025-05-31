@@ -2,11 +2,15 @@ const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
 const Message = require('../models/Message');
 const auth = require('../middleware/auth');
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+
+const upload = multer({ dest: os.tmpdir() });
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -16,7 +20,9 @@ cloudinary.config({
 
 router.get('/', auth, async (req, res) => {
   try {
-    const messages = await Message.find().sort({ timestamp: -1 }).populate('author', 'username email profilePicture');
+    const messages = await Message.find()
+      .sort({ timestamp: -1 })
+      .populate('author', 'username email profilePicture');
     res.json(messages);
   } catch (err) {
     console.error('Error fetching messages:', err);
@@ -34,23 +40,21 @@ router.post('/', auth, upload.single('attachment'), async (req, res) => {
       attachmentUrl = result.secure_url;
     } catch (err) {
       console.error('Cloudinary upload error:', err);
-      fs.unlink(req.file.path, (unlinkErr) => {
-        if (unlinkErr) console.error('Failed to delete local file:', unlinkErr);
+      cleanupTempFile(req.file.path);
+      return res.status(500).json({
+        error: 'Failed to upload attachment to Cloudinary',
+        details: err.message,
       });
-      return res.status(500).json({ error: 'Failed to upload attachment to Cloudinary', details: err.message });
     }
 
-    // Delete the file from the local uploads directory
-    fs.unlink(req.file.path, (unlinkErr) => {
-      if (unlinkErr) console.error('Failed to delete local file:', unlinkErr);
-    });
+    cleanupTempFile(req.file.path);
   }
 
   try {
-    const newMessage = new Message({ 
-      message, 
-      attachment: attachmentUrl, 
-      author: req.user.userId 
+    const newMessage = new Message({
+      message,
+      attachment: attachmentUrl,
+      author: req.user.userId,
     });
     await newMessage.save();
     res.status(201).json(newMessage);
@@ -60,7 +64,6 @@ router.post('/', auth, upload.single('attachment'), async (req, res) => {
   }
 });
 
-// Update a message
 router.put('/:id', auth, upload.single('attachment'), async (req, res) => {
   const { message } = req.body;
   let attachmentUrl = null;
@@ -71,16 +74,14 @@ router.put('/:id', auth, upload.single('attachment'), async (req, res) => {
       attachmentUrl = result.secure_url;
     } catch (err) {
       console.error('Cloudinary upload error:', err);
-      fs.unlink(req.file.path, (unlinkErr) => {
-        if (unlinkErr) console.error('Failed to delete local file:', unlinkErr);
+      cleanupTempFile(req.file.path);
+      return res.status(500).json({
+        error: 'Failed to upload attachment to Cloudinary',
+        details: err.message,
       });
-      return res.status(500).json({ error: 'Failed to upload attachment to Cloudinary', details: err.message });
     }
 
-    // Delete the file from the local uploads directory
-    fs.unlink(req.file.path, (unlinkErr) => {
-      if (unlinkErr) console.error('Failed to delete local file:', unlinkErr);
-    });
+    cleanupTempFile(req.file.path);
   }
 
   try {
@@ -105,7 +106,6 @@ router.put('/:id', auth, upload.single('attachment'), async (req, res) => {
   }
 });
 
-// Delete a message
 router.delete('/:id', auth, async (req, res) => {
   try {
     const messageToDelete = await Message.findById(req.params.id);
@@ -124,5 +124,13 @@ router.delete('/:id', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+function cleanupTempFile(filePath) {
+  fs.unlink(filePath, (err) => {
+    if (err) {
+      console.error(`Failed to delete temp file ${filePath}:`, err);
+    }
+  });
+}
 
 module.exports = router;
