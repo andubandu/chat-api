@@ -4,11 +4,13 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
+const os = require('os');
+
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: os.tmpdir() }); 
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -18,28 +20,29 @@ cloudinary.config({
 
 router.post('/register', upload.single('profilePicture'), async (req, res) => {
   const { username, password, email } = req.body;
-  let profilePictureUrl = 'https://res.cloudinary.com/dmyrg759k/image/upload/v1741884391/default-avatar-icon-of-social-media-user-vector_m82mma.jpg';
+  let profilePictureUrl =
+    'https://res.cloudinary.com/dmyrg759k/image/upload/v1741884391/default-avatar-icon-of-social-media-user-vector_m82mma.jpg';
 
   if (req.file) {
     try {
       const result = await cloudinary.uploader.upload(req.file.path);
       profilePictureUrl = result.secure_url;
-      fs.unlink(req.file.path, (unlinkErr) => {
-        if (unlinkErr) console.error('Failed to delete local file:', unlinkErr);
-      });
     } catch (err) {
       console.error('Cloudinary upload error:', err);
+      cleanupTempFile(req.file.path);
       return res.status(500).json({ error: 'Failed to upload profile picture to Cloudinary', details: err.message });
     }
+
+    cleanupTempFile(req.file.path);
   }
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({ 
-      username, 
-      password: hashedPassword, 
-      email, 
-      profilePicture: profilePictureUrl 
+    const newUser = new User({
+      username,
+      password: hashedPassword,
+      email,
+      profilePicture: profilePictureUrl,
     });
     await newUser.save();
     res.status(201).json({ message: 'User registered successfully' });
@@ -63,7 +66,12 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid username or password' });
     }
 
-    const token = jwt.sign({ userId: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign(
+      { userId: user._id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
     res.json({ token });
   } catch (err) {
     console.error('Error logging in user:', err);
@@ -71,7 +79,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Update user profile
 router.put('/profile', auth, upload.single('profilePicture'), async (req, res) => {
   const { username, email, password } = req.body;
   let profilePictureUrl = null;
@@ -80,13 +87,13 @@ router.put('/profile', auth, upload.single('profilePicture'), async (req, res) =
     try {
       const result = await cloudinary.uploader.upload(req.file.path);
       profilePictureUrl = result.secure_url;
-      fs.unlink(req.file.path, (unlinkErr) => {
-        if (unlinkErr) console.error('Failed to delete local file:', unlinkErr);
-      });
     } catch (err) {
       console.error('Cloudinary upload error:', err);
+      cleanupTempFile(req.file.path);
       return res.status(500).json({ error: 'Failed to upload profile picture to Cloudinary', details: err.message });
     }
+
+    cleanupTempFile(req.file.path);
   }
 
   try {
@@ -108,7 +115,6 @@ router.put('/profile', auth, upload.single('profilePicture'), async (req, res) =
   }
 });
 
-// Delete user account
 router.delete('/profile', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
@@ -123,5 +129,12 @@ router.delete('/profile', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Helper function to clean up uploaded temp files
+function cleanupTempFile(filePath) {
+  fs.unlink(filePath, (err) => {
+    if (err) console.error(`Failed to delete temp file ${filePath}:`, err);
+  });
+}
 
 module.exports = router;
